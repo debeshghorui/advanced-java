@@ -1,6 +1,15 @@
-# Eclipse workspace (not the project itself)
+# Eclipse workspace (machine-local)
 .metadata/
+Servers/
+
+# Local Apache Tomcat install + deployed apps (do not commit)
+apache-tomcat-*/
+apache-tomcat-*.tar.gz
+apache-tomcat-*.zip
+
+# Eclipse / Java build outputs
 bin/
+build/
 tmp/
 *.tmp
 *.bak
@@ -28,16 +37,6 @@ local.properties
 # Mobile Tools for Java (J2ME)
 .mtj.tmp/
 
-# Package files — keep JARs that live in project lib/ (JDBC driver)
-*.jar
-*.war
-*.nar
-*.ear
-*.zip
-*.tar.gz
-*.rar
-!**/lib/*.jar
-
 # JVM crash logs
 # https://www.java.com/en/download/help/error_hotspot.xml
 hs_err_pid*
@@ -64,7 +63,6 @@ Thumbs.db
 target/
 .mvn/timing.properties
 .gradle/
-build/
 !gradle/wrapper/gradle-wrapper.jar
 
 # Env / secrets
