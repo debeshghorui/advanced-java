@@ -6,7 +6,7 @@ public class dao {
 		Connection con = dbconnection.getConnection();
 		try {
 			PreparedStatement ps = con.prepareStatement(
-					"create table login300(userid varchar2(10) primary key,password varchar2(10))");
+					"create table login(userid varchar2(10) primary key,password varchar2(10))");
 			int result = ps.executeUpdate();
 			System.out.println(result);
 		} catch (Exception e) {
@@ -17,7 +17,7 @@ public class dao {
 	public static boolean add(String uid, String Psw) {
 		Connection con = dbconnection.getConnection();
 		try {
-			PreparedStatement ps = con.prepareStatement("insert into login300 values(?,?)");
+			PreparedStatement ps = con.prepareStatement("insert into login values(?,?)");
 			ps.setString(1, uid);
 			ps.setString(2, Psw);
 			int result = ps.executeUpdate();
