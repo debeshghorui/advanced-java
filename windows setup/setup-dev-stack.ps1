@@ -3,34 +3,21 @@
 # Eclipse: remove an existing install, then install the web package
 #          (Eclipse IDE for Enterprise Java and Web Developers, installer choice 2).
 # Tomcat: ask for 9, 10.1, or the latest.
-# Oracle 21c XE: install only when it is missing. Login id and password are both system.
 # A notes file is written to the Downloads folder.
 #Requires -Version 5.1
 
 [CmdletBinding()]
 param(
     [string]$InstallRoot = 'C:\dev',
-    [string]$OracleInstallDir = 'C:\app\oracle\product\21.0.0',
-    [string]$OracleZip,
     [switch]$SkipJava,
     [switch]$SkipEclipse,
-    [switch]$SkipTomcat,
-    [switch]$SkipOracle
+    [switch]$SkipTomcat
 )
 
 $ErrorActionPreference = 'Continue'
 try {
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 } catch { }
-
-$OracleZipName = 'OracleXE213_Win64.zip'
-$OracleUrl = 'https://download.oracle.com/otn-pub/otn_software/OracleXE213_Win64.zip'
-$OracleSha256 = '939742c3305c466566a55f607638621b6aa7033a183175f6bcd6cffb48e6bc3f'
-$OracleDownloadPage = 'https://www.oracle.com/database/technologies/xe-downloads.html'
-$OracleLogin = 'system'
-$OraclePassword = 'system'
-# The XE installer rejects "system". This is used only during setup, then changed.
-$OracleInstallerPassword = 'System2026Temp'
 
 $script:Report = New-Object System.Collections.Generic.List[string]
 $script:Info = New-Object System.Collections.Generic.List[string]
@@ -343,10 +330,6 @@ function Unregister-ChildProcess {
 function Remove-UnfinishedPath {
     param([string]$Path)
     if (-not $Path) { return }
-    if ($Path -like '*oracle-password-pending.txt') {
-        $oracleService = Get-Service -Name 'OracleServiceXE' -ErrorAction SilentlyContinue
-        if ($oracleService) { return }
-    }
     if (-not (Test-Path -LiteralPath $Path)) { return }
     Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction SilentlyContinue
     [void]$script:CleanupLog.Add($Path)
@@ -1040,96 +1023,14 @@ function Test-DirectAdministrator {
     }
 }
 
-function Clear-OracleInstallerVariables {
-    foreach ($scope in @('Process', 'User', 'Machine')) {
-        foreach ($name in @('ORACLE_HOME', 'TNS_ADMIN')) {
-            $current = [Environment]::GetEnvironmentVariable($name, $scope)
-            if ($current) {
-                Write-Host "Removing $scope variable $name so the Oracle installer can run."
-                [Environment]::SetEnvironmentVariable($name, $null, $scope)
-            }
-        }
-    }
-    Remove-Item Env:ORACLE_HOME -ErrorAction SilentlyContinue
-    Remove-Item Env:TNS_ADMIN -ErrorAction SilentlyContinue
-}
-
-function Get-ListenerPort {
-    param([string]$OracleHome, [int]$Fallback)
-    $lsnrctl = Join-Path $OracleHome 'bin\lsnrctl.exe'
-    if (-not (Test-Path $lsnrctl)) { return $Fallback }
-    $env:ORACLE_HOME = $OracleHome
-    $status = & $lsnrctl status 2>&1 | Out-String
-    $match = [regex]::Match($status, 'PORT\s*=\s*(\d+)')
-    if ($match.Success) { return [int]$match.Groups[1].Value }
-    return $Fallback
-}
-
-function Set-OraclePasswordToSystem {
-    param(
-        [string]$OracleHome,
-        [int]$Port,
-        [string]$InstallerPassword
-    )
-    $sqlplus = Join-Path $OracleHome 'bin\sqlplus.exe'
-    if (-not (Test-Path $sqlplus)) { throw 'sqlplus.exe was not found.' }
-
-    $sqlFile = Join-Path $env:TEMP 'set-oracle-system-login.sql'
-    $sqlLines = @(
-        'WHENEVER SQLERROR CONTINUE',
-        'ALTER PROFILE DEFAULT LIMIT PASSWORD_VERIFY_FUNCTION NULL;',
-        'ALTER PROFILE DEFAULT LIMIT PASSWORD_LIFE_TIME UNLIMITED;',
-        'WHENEVER SQLERROR EXIT SQL.SQLCODE',
-        'ALTER USER SYS IDENTIFIED BY "system";',
-        'ALTER USER SYSTEM IDENTIFIED BY "system";',
-        'ALTER PLUGGABLE DATABASE ALL OPEN;',
-        'ALTER SESSION SET CONTAINER=XEPDB1;',
-        'WHENEVER SQLERROR CONTINUE',
-        'ALTER PROFILE DEFAULT LIMIT PASSWORD_VERIFY_FUNCTION NULL;',
-        'ALTER PROFILE DEFAULT LIMIT PASSWORD_LIFE_TIME UNLIMITED;',
-        'WHENEVER SQLERROR EXIT SQL.SQLCODE',
-        'ALTER USER SYSTEM IDENTIFIED BY "system";',
-        'ALTER USER PDBADMIN IDENTIFIED BY "system";',
-        'EXIT'
-    )
-    Set-Content -Path $sqlFile -Value $sqlLines -Encoding ASCII
-
-    $env:ORACLE_HOME = $OracleHome
-    $env:ORACLE_SID = 'XE'
-    $connect = "sys/$InstallerPassword@//127.0.0.1:${Port}/XE as sysdba"
-    $ok = $false
-    try {
-        for ($try = 1; $try -le 12; $try++) {
-            Assert-SetupContinue
-            Write-Host "Setting the Oracle login to system/system (try $try of 12)..."
-            & $sqlplus -s $connect "@$sqlFile"
-            if ($LASTEXITCODE -eq 0) {
-                $ok = $true
-                break
-            }
-            for ($second = 0; $second -lt 15; $second++) {
-                if ($script:StopRequested) { throw 'Setup was stopped.' }
-                Start-Sleep -Seconds 1
-            }
-        }
-    } finally {
-        Remove-Item $sqlFile -Force -ErrorAction SilentlyContinue
-    }
-    if (-not $ok) {
-        throw 'Oracle installed, but the login could not be changed to system/system yet. Try again after the database has finished starting.'
-    }
-}
-
 function Write-SetupNotes {
     if ($script:NotesWritten) { return }
     if (-not $userDownloads) { return }
     $script:NotesWritten = $true
     $infoPath = Join-Path $userDownloads 'dev-setup-info.txt'
     $script:NotesPath = $infoPath
-    $shownListener = if ($listenerPort -eq 0) { 1521 } else { $listenerPort }
-    $shownEm = if ($emPort -eq 0) { 5550 } else { $emPort }
 
-    $script:Info.Add("Java, Eclipse, Tomcat, and Oracle setup")
+    $script:Info.Add("Java, Eclipse, and Tomcat setup")
     $script:Info.Add("Saved: $(Get-Date -Format 'yyyy-MM-dd HH:mm')")
     $script:Info.Add("PC: $osCaption")
     $script:Info.Add("This file: $infoPath")
@@ -1170,25 +1071,6 @@ function Write-SetupNotes {
         $script:Info.Add("Eclipse server type: $tomcatRuntimeName")
     } else {
         $script:Info.Add('Tomcat was not set up.')
-    }
-    $script:Info.Add('')
-    $script:Info.Add('ORACLE DATABASE 21c XE')
-    if ($oraclePasswordForNotes) {
-        $script:Info.Add("Status: $oracleNote")
-        $script:Info.Add("Login id: $OracleLogin")
-        $script:Info.Add("Password: $oraclePasswordForNotes")
-        $script:Info.Add("ORACLE_HOME: $oracleHome")
-        $script:Info.Add("Listener port: $shownListener")
-        $script:Info.Add("Service name: XEPDB1")
-        $script:Info.Add("JDBC URL: jdbc:oracle:thin:@//127.0.0.1:${shownListener}/XEPDB1")
-        $script:Info.Add("SQL*Plus: sqlplus ${OracleLogin}/${oraclePasswordForNotes}@//127.0.0.1:${shownListener}/XEPDB1")
-        $script:Info.Add("EM Express: https://127.0.0.1:${shownEm}/em")
-        $jdbc = Get-ChildItem (Join-Path $oracleHome 'jdbc\lib') -Filter 'ojdbc*.jar' -ErrorAction SilentlyContinue |
-            Select-Object -First 1
-        if ($jdbc) { $script:Info.Add("JDBC driver: $($jdbc.FullName)") }
-    } else {
-        $script:Info.Add("Status: $oracleNote")
-        if ($oracleHome) { $script:Info.Add("ORACLE_HOME: $oracleHome") }
     }
     $script:Info.Add('')
     $script:Info.Add('ADD TOMCAT IN ECLIPSE')
@@ -1353,7 +1235,7 @@ if (-not (Test-Administrator)) {
     exit
 }
 
-if ($InstallRoot -match '\s' -or $OracleInstallDir -match '\s') {
+if ($InstallRoot -match '\s') {
     Write-Host "Use install folders that do not contain spaces." -ForegroundColor Red
     Read-Host "Press Enter to close"
     exit 1
@@ -1380,7 +1262,6 @@ Clear-InterruptedSetup
 $osCaption = (Get-CimInstance Win32_OperatingSystem).Caption
 $ramGb = [math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB, 1)
 $windowsHome = $osCaption -match '\bHome\b'
-$oracleAlreadyInstalled = $null -ne (Get-Service -Name 'OracleServiceXE' -ErrorAction SilentlyContinue)
 $tomcatHome = Join-Path $InstallRoot 'tomcat'
 $installedTomcatVersion = Get-InstalledTomcatVersion -TomcatHome $tomcatHome
 
@@ -1455,7 +1336,7 @@ if ($SkipJava) {
     }
 } elseif ($installJava) {
     Write-Step "Install Java $latestJavaFeature"
-    $script:StepLabel = 'Step 1 of 4  Java'
+    $script:StepLabel = 'Step 1 of 3  Java'
     try {
         Install-JdkFeature -Feature $latestJavaFeature -DownloadsDirectory $downloads
         $jdkHome = Find-JdkByFeature -Feature $latestJavaFeature
@@ -1485,7 +1366,7 @@ if ($SkipEclipse) {
     Add-Result 'SKIP' 'Eclipse skipped by request.'
 } else {
     Write-Step 'Eclipse IDE for Enterprise Java and Web Developers'
-    $script:StepLabel = 'Step 2 of 4  Eclipse'
+    $script:StepLabel = 'Step 2 of 3  Eclipse'
     try {
         $eclipse = Find-EclipseExecutable
         $alreadyJee = $eclipse -and ($eclipse.FullName -match 'Eclipse\.JEE|eclipse-jee')
@@ -1548,7 +1429,7 @@ if ($SkipTomcat) {
     Stop-Setup
 } else {
     Write-Step "Install Tomcat $($selectedTomcat.Version)"
-    $script:StepLabel = 'Step 3 of 4  Tomcat'
+    $script:StepLabel = 'Step 3 of 3  Tomcat'
     try {
         $free = Get-FreeGigabytes -DriveLetter 'C'
         if ($free -lt 2) { throw "Drive C: has $free GB free. Tomcat setup needs at least 2 GB." }
@@ -1672,209 +1553,6 @@ if ($SkipTomcat) {
     }
 }
 
-# ---------- Oracle ----------
-$listenerPort = 1521
-$emPort = 5500
-$oracleHome = ''
-$oraclePasswordForNotes = ''
-$oracleNote = ''
-$extractRoot = $null
-if ($SkipOracle) {
-    Add-Result 'SKIP' 'Oracle skipped by request.'
-    $oracleNote = 'Oracle setup was skipped.'
-} elseif ($oracleAlreadyInstalled) {
-    $candidateHome = Join-Path $OracleInstallDir 'dbhomeXE'
-    if (Test-Path (Join-Path $candidateHome 'bin\sqlplus.exe')) { $oracleHome = $candidateHome }
-    $pendingPassword = Join-Path $InstallRoot 'oracle-password-pending.txt'
-    if ((Test-Path $pendingPassword) -and $oracleHome) {
-        try {
-            $listenerPort = Get-ListenerPort -OracleHome $oracleHome -Fallback 1521
-            Set-OraclePasswordToSystem -OracleHome $oracleHome -Port $listenerPort -InstallerPassword $OracleInstallerPassword
-            Remove-Item $pendingPassword -Force
-            $oraclePasswordForNotes = $OraclePassword
-            $oracleNote = 'Installed by this setup. Login id and password are both system.'
-            Add-Result 'OK' 'Oracle Database 21c XE is installed. Login id and password are both system.'
-        } catch {
-            if (Test-SetupStopped $_) { Stop-Setup -Cancelled }
-            Add-Result 'FAIL' $_.Exception.Message
-            $oracleNote = "Oracle is installed, but the login is not system yet. Temporary password: $OracleInstallerPassword"
-            Stop-Setup
-        }
-    } else {
-        Add-Result 'OK' 'Oracle Database 21c XE is already installed. It was not downloaded again.'
-        $oracleNote = 'Oracle Database 21c XE was already installed. The existing password was kept.'
-    }
-} elseif ($windowsHome) {
-    Add-Result 'SKIP' 'Oracle 21c XE does not support Windows Home. Java, Eclipse, and Tomcat can still be used.'
-    $oracleNote = 'Oracle was not installed because this PC is Windows Home.'
-} elseif ($ramGb -lt 2) {
-    Add-Result 'SKIP' "Oracle 21c XE needs at least 2 GB of memory. This PC has $ramGb GB."
-    $oracleNote = "Oracle was not installed because this PC has $ramGb GB of memory."
-} else {
-    Write-Step 'Oracle Database 21c Express Edition'
-    $script:StepLabel = 'Step 4 of 4  Oracle'
-    Write-Host "Oracle is not installed. It will be downloaded and set up."
-    Write-Host "Login id: $OracleLogin"
-    Write-Host "Password: $OraclePassword"
-    $directAdmin = Test-DirectAdministrator
-    if ($directAdmin -eq $false) {
-        Add-Result 'SKIP' 'Oracle was not installed. Sign in as a user that is a direct member of Administrators, then run setup again.'
-        $oracleNote = 'Oracle was not installed. The Windows user must be a direct member of Administrators.'
-    } else {
-        try {
-            $free = Get-FreeGigabytes -DriveLetter 'C'
-            if ($free -lt 12) { throw "Drive C: has $free GB free. Oracle setup needs at least 12 GB." }
-
-            if (-not (Test-PortFree -Port 1521)) { $listenerPort = 0 }
-            if (-not (Test-PortFree -Port 5500)) { $emPort = 0 }
-
-            $zipPath = $null
-            if ($OracleZip -and (Test-Path $OracleZip)) { $zipPath = (Resolve-Path $OracleZip).Path }
-            if (-not $zipPath) { $zipPath = Find-SavedFile -FileName $OracleZipName -DownloadsDirectory $downloads }
-            $oracleVerified = $zipPath -and (Test-FileHashMatch -Path $zipPath -Algorithm 'SHA256' -Expected $OracleSha256 -ExpectedSeconds 120)
-            if ($zipPath -and -not $oracleVerified) {
-                Write-Host "A file named $OracleZipName was found, but it is not the official installer." -ForegroundColor Yellow
-                $zipPath = $null
-            }
-            if ($oracleVerified) {
-                Write-Host "Using the Oracle installer that is already downloaded:"
-                Write-Host "  $zipPath"
-            } else {
-                $zipPath = Join-Path $downloads $OracleZipName
-                Write-Host "Trying the Oracle download (about 1.8 GB)..."
-                $downloaded = $true
-                try {
-                    Save-RemoteFile -Url $OracleUrl -Destination $zipPath -Cookie 'oraclelicense=accept-securebackup-cookie' -FallbackBytes 1932735283
-                } catch {
-                    if (Test-SetupStopped $_) { throw }
-                    $downloaded = $false
-                }
-                if ($downloaded -and (Test-FileHashMatch -Path $zipPath -Algorithm 'SHA256' -Expected $OracleSha256 -ExpectedSeconds 120)) {
-                    $oracleVerified = $true
-                } else {
-                    if (Test-Path $zipPath) { Remove-Item $zipPath -Force -ErrorAction SilentlyContinue }
-                    Write-Host ""
-                    Write-Host "Oracle requires a free Oracle account and a license acceptance." -ForegroundColor Yellow
-                    Write-Host "1. Sign in on the page that is about to open."
-                    Write-Host "2. Download Oracle Database 21c Express Edition for Windows (64-bit)."
-                    Write-Host "3. Save the zip as:"
-                    Write-Host "   $zipPath"
-                    Start-Process $OracleDownloadPage
-                    Read-Host "Press Enter after the zip is saved there"
-                    if ($script:StopRequested) { throw 'Setup was stopped.' }
-                    if (Test-FileHashMatch -Path $zipPath -Algorithm 'SHA256' -Expected $OracleSha256 -ExpectedSeconds 120) {
-                        $oracleVerified = $true
-                    }
-                }
-            }
-            if (-not $oracleVerified) {
-                throw "OracleXE213_Win64.zip is missing or is not the official file. Save it to $zipPath and run setup again."
-            }
-
-            $extractRoot = Join-Path $InstallRoot 'oracle-extract'
-            Add-UnfinishedDirectory -Path $extractRoot
-            if (Test-Path $extractRoot) { Remove-Item $extractRoot -Recurse -Force }
-            New-Item -ItemType Directory -Force -Path $extractRoot | Out-Null
-            Write-Host "Extracting Oracle. This is a large archive..."
-            $tarProcess = Start-SetupProcess -FilePath 'tar.exe' -ArgumentList @('-xf', $zipPath, '-C', $extractRoot)
-            $tarCode = Wait-SetupProcess -Process $tarProcess -Label $script:StepLabel -ExpectedSeconds 240
-            if ($tarCode -ne 0) { throw 'Could not extract the Oracle installer.' }
-
-            $setupExe = Get-ChildItem $extractRoot -Filter 'setup.exe' -Recurse | Select-Object -First 1
-            if (-not $setupExe) { throw 'setup.exe was not inside the Oracle zip.' }
-
-            $rspPath = Join-Path $setupExe.DirectoryName 'XEInstall.rsp'
-            Set-Content -Path $rspPath -Encoding ASCII -Value @(
-                "INSTALLDIR=$OracleInstallDir\",
-                "PASSWORD=$OracleInstallerPassword",
-                "LISTENER_PORT=$listenerPort",
-                "EMEXPRESS_PORT=$emPort",
-                'CHAR_SET=AL32UTF8',
-                'DB_DOMAIN='
-            )
-
-            Clear-OracleInstallerVariables
-            $setupLog = Join-Path $InstallRoot 'oracle-setup.log'
-            if (Test-Path $setupLog) { Remove-Item $setupLog -Force }
-            $argumentLine = "/s /v`"RSP_FILE=$rspPath`" /v`"/L*v $setupLog`" /v`"/qn`""
-            Write-Host "Installing Oracle. This often takes 15 to 25 minutes."
-            $process = Start-Process -FilePath $setupExe.FullName -ArgumentList $argumentLine -WorkingDirectory $setupExe.DirectoryName -PassThru
-            Register-ChildProcess -ProcessId $process.Id
-            $oracleStarted = Get-Date
-            $deadline = $oracleStarted.AddMinutes(45)
-            $installOk = $false
-            $nextLogCheck = $oracleStarted
-            try {
-                while ((Get-Date) -lt $deadline) {
-                    if ($script:StopRequested) {
-                        Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
-                        [void]$script:CleanupLog.Add("Stopped process $($process.Id)")
-                        throw 'Setup was stopped.'
-                    }
-                    $elapsed = ((Get-Date) - $oracleStarted).TotalSeconds
-                    $percent = [int][math]::Min(95, [math]::Floor(($elapsed / 1200) * 100))
-                    Write-SetupProgressLine -Label $script:StepLabel -Percent $percent -Detail (Format-ExpectedDetail -ElapsedSeconds $elapsed -ExpectedSeconds 1200)
-                    if ($process.HasExited -and $process.ExitCode -ne 0) {
-                        throw "Oracle setup.exe exited with code $($process.ExitCode). See $setupLog"
-                    }
-                    if ((Get-Date) -ge $nextLogCheck) {
-                        $nextLogCheck = (Get-Date).AddSeconds(5)
-                        if (Test-Path $setupLog) {
-                            $logText = Get-Content $setupLog -Raw -ErrorAction SilentlyContinue
-                            $statusMatch = [regex]::Match($logText, 'Installation success or error status:\s*(\d+)')
-                            if ($statusMatch.Success) {
-                                $installOk = ([int]$statusMatch.Groups[1].Value -eq 0)
-                                break
-                            }
-                        }
-                    }
-                    Start-Sleep -Seconds 1
-                }
-            } finally {
-                Clear-SetupProgressLine
-            }
-            if (-not $installOk) {
-                $service = Get-Service -Name 'OracleServiceXE' -ErrorAction SilentlyContinue
-                if ($service -and $process.HasExited -and $process.ExitCode -eq 0) { $installOk = $true }
-            }
-            if (-not $installOk) {
-                throw "Oracle did not report a successful install. See $setupLog"
-            }
-            Unregister-ChildProcess -ProcessId $process.Id
-
-            $oracleHome = Join-Path $OracleInstallDir 'dbhomeXE'
-            if (Test-Path (Join-Path $oracleHome 'bin\sqlplus.exe')) {
-                Set-MachineVariable -Name 'ORACLE_HOME' -Value $oracleHome
-                Set-MachineVariable -Name 'ORACLE_SID' -Value 'XE'
-                Add-MachinePathEntry -Directory (Join-Path $oracleHome 'bin')
-                $listenerPort = Get-ListenerPort -OracleHome $oracleHome -Fallback $(if ($listenerPort -eq 0) { 1521 } else { $listenerPort })
-            }
-
-            $pendingPassword = Join-Path $InstallRoot 'oracle-password-pending.txt'
-            Set-Content -Path $pendingPassword -Value 'pending' -Encoding ASCII
-            Set-OraclePasswordToSystem -OracleHome $oracleHome -Port $listenerPort -InstallerPassword $OracleInstallerPassword
-            Remove-Item $pendingPassword -Force -ErrorAction SilentlyContinue
-            $oraclePasswordForNotes = $OraclePassword
-            $oracleNote = 'Installed by this setup. Login id and password are both system.'
-            Remove-UnfinishedDirectory -Path $extractRoot
-            Remove-Item $extractRoot -Recurse -Force -ErrorAction SilentlyContinue
-            Add-Result 'OK' 'Oracle Database 21c XE installed. Login id and password are both system.'
-        } catch {
-            if (Test-SetupStopped $_) { Stop-Setup -Cancelled }
-            Add-Result 'FAIL' $_.Exception.Message
-            $oracleNote = $_.Exception.Message
-            $pendingPassword = Join-Path $InstallRoot 'oracle-password-pending.txt'
-            $oracleService = Get-Service -Name 'OracleServiceXE' -ErrorAction SilentlyContinue
-            if ((Test-Path $pendingPassword) -and $oracleService) {
-                $oracleNote = "$oracleNote Temporary password until it is switched to system: $OracleInstallerPassword"
-            } elseif (Test-Path $pendingPassword) {
-                Add-UnfinishedFile -Path $pendingPassword
-            }
-            Stop-Setup
-        }
-    }
-}
-
 # ---------- Notes in Downloads ----------
 Complete-SetupRunState
 Write-SetupNotes
@@ -1887,6 +1565,6 @@ if ($script:NotesPath) {
     Write-Host "Paths, ids, and passwords were saved to:"
     Write-Host "  $($script:NotesPath)"
 }
-Write-Host "Open a new terminal before using java or sqlplus, so the new PATH is loaded."
+Write-Host "Open a new terminal before using java, so the new PATH is loaded."
 Write-Host ""
 Read-Host "Press Enter to close"
