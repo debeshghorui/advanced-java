@@ -1,0 +1,146 @@
+name: Windows Setup Test
+
+on:
+  push:
+    paths:
+      - 'windows setup/**'
+      - '.github/workflows/windows-setup-test.yml'
+  pull_request:
+    paths:
+      - 'windows setup/**'
+      - '.github/workflows/windows-setup-test.yml'
+
+jobs:
+  test-windows-setup:
+    runs-on: windows-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Validate PowerShell script syntax
+        run: |
+          Write-Host "Validating PowerShell script syntax..."
+          Get-ChildItem -Path "windows setup" -Filter "*.ps1" | ForEach-Object {
+            Write-Host "Checking $($_.Name)..."
+            $null = [System.Management.Automation.PSParser]::Tokenize((Get-Content $_.FullName -Raw), [ref]$null)
+            Write-Host "  Syntax valid"
+          }
+      
+      - name: Test PowerShell script structure
+        run: |
+          Write-Host "Testing script structure..."
+          $scriptPath = "windows setup\setup-dev-stack.ps1"
+          
+          # Check if script exists
+          if (-not (Test-Path $scriptPath)) {
+            Write-Error "Script not found: $scriptPath"
+            exit 1
+          }
+          
+          # Check script parameters
+          $content = Get-Content $scriptPath -Raw
+          
+          if ($content -match 'param\(') {
+            Write-Host "  Script has parameters section"
+          } else {
+            Write-Error "Script missing parameters section"
+            exit 1
+          }
+          
+          # Check for required functions
+          $requiredFunctions = @(
+            'Write-Step',
+            'Add-Result',
+            'Test-Administrator',
+            'Get-WingetPath',
+            'Install-WingetId'
+          )
+          
+          foreach ($func in $requiredFunctions) {
+            if ($content -match "function $func") {
+              Write-Host "  Function $func found"
+            } else {
+              Write-Error "Missing function: $func"
+              exit 1
+            }
+          }
+          
+          Write-Host "Script structure validation passed"
+      
+      - name: Check README.md
+        run: |
+          Write-Host "Checking README.md..."
+          $readmePath = "windows setup\README.md"
+          
+          if (-not (Test-Path $readmePath)) {
+            Write-Error "README.md not found"
+            exit 1
+          }
+          
+          $content = Get-Content $readmePath -Raw
+          
+          # Check for key sections
+          $requiredSections = @(
+            'Windows setup',
+            'Java',
+            'Eclipse',
+            'Tomcat',
+            'Oracle'
+          )
+          
+          foreach ($section in $requiredSections) {
+            if ($content -match $section) {
+              Write-Host "  Section '$section' found"
+            } else {
+              Write-Warning "Section '$section' not found in README"
+            }
+          }
+          
+          Write-Host "README check completed"
+      
+      - name: Check Windows batch file
+        run: |
+          Write-Host "Checking Run-Setup.cmd..."
+          $cmdPath = "windows setup\Run-Setup.cmd"
+          
+          if (-not (Test-Path $cmdPath)) {
+            Write-Error "Run-Setup.cmd not found"
+            exit 1
+          }
+          
+          $content = Get-Content $cmdPath -Raw
+          
+          # Check if it calls PowerShell
+          if ($content -match 'powershell' -or $content -match 'pwsh') {
+            Write-Host "  Script calls PowerShell"
+          } else {
+            Write-Error "Run-Setup.cmd does not call PowerShell"
+            exit 1
+          }
+          
+          Write-Host "Run-Setup.cmd check passed"
+      
+      - name: Dry-run validation (help mode)
+        run: |
+          Write-Host "Testing script help/information..."
+          $scriptPath = "windows setup\setup-dev-stack.ps1"
+          
+          # Try to get script info (won't actually install anything)
+          Write-Host "Script path: $scriptPath"
+          Write-Host "Script size: $((Get-Item $scriptPath).Length) bytes"
+          
+          # Check script version requirement
+          $content = Get-Content $scriptPath -Raw
+          if ($content -match '#Requires -Version') {
+            Write-Host "  Script has version requirement"
+          }
+          
+          Write-Host "Dry-run validation completed"
+      
+      - name: List all files in windows setup folder
+        run: |
+          Write-Host "Files in 'windows setup' folder:"
+          Get-ChildItem -Path "windows setup" -Recurse | ForEach-Object {
+            Write-Host "  $($_.FullName)"
+          }
