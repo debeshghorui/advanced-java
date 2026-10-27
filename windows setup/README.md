@@ -7,6 +7,17 @@ The script checks each program first.
 - If it is missing, the script downloads it, installs it, and sets it up.
 - If the installer is already in Downloads, or in `C:\dev\downloads`, that file is used.
 
+## Command-line options
+
+Run the script from PowerShell with optional switches to skip specific components:
+
+```powershell
+.\setup-dev-stack.ps1 -SkipJava
+.\setup-dev-stack.ps1 -SkipEclipse
+.\setup-dev-stack.ps1 -SkipTomcat
+.\setup-dev-stack.ps1 -SkipJava -SkipEclipse -SkipTomcat
+```
+
 ## What it decides
 
 **Java.** If Java is missing, it installs the latest Temurin JDK. If the installed Java is already the latest, it leaves it. If an older Java is installed, it asks:
@@ -24,6 +35,8 @@ The script checks each program first.
 
 If that exact version is already in `C:\dev\tomcat`, it is not downloaded again.
 
+Tomcat is installed as a Windows service with automatic startup. It runs on port 8080 (or 8081 if 8080 is already in use). The Tomcat Manager is configured with username `admin` and password `admin`.
+
 **Oracle Database 21c XE.** If it is already installed, it is left alone. If it is missing, the script installs it. The login id is `system` and the password is `system`.
 
 ## Notes file
@@ -31,6 +44,13 @@ If that exact version is already in `C:\dev\tomcat`, it is not downloaded again.
 Paths, ids, and passwords are saved here:
 
 `C:\Users\<you>\Downloads\dev-setup-info.txt`
+
+## Features
+
+- **Resume capability**: If the setup is interrupted (closed or stopped), the next run cleans up partial downloads and unfinished installations before starting fresh.
+- **Progress tracking**: Real-time progress bars show estimated time remaining for downloads and installations.
+- **Intelligent caching**: The script checks Downloads, `C:\dev\downloads`, and the script folder for existing installers before downloading.
+- **Checksum verification**: Downloaded files are verified against published SHA512 checksums to ensure integrity.
 
 ## Before you start
 
@@ -50,6 +70,15 @@ Oracle connection:
 `jdbc:oracle:thin:@//127.0.0.1:1521/XEPDB1`
 
 Tomcat 9 uses `javax.servlet`. Tomcat 10.1 and Tomcat 11 use `jakarta.servlet`.
+
+### Tomcat control scripts
+
+The setup creates two batch scripts in `C:\dev`:
+
+- `Start-Tomcat.cmd` - Start Tomcat manually
+- `Stop-Tomcat.cmd` - Stop Tomcat manually
+
+These are useful if you need to restart Tomcat or if the Windows service is not running.
 
 ### Add Tomcat in Eclipse
 
