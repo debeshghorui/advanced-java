@@ -73,3 +73,6 @@ target/
 # Misc editor leftovers
 *.orig
 *~
+
+# LiMS
+output/

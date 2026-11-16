@@ -25,8 +25,8 @@ public class RegisterServlet extends HttpServlet {
 
 		try {
 			Connection con = DBConnection.getConnection();
-			PreparedStatement ps = con.prepareStatement(
-					"insert into book values(?,?,?,?,?,?,?,?,?)");
+			PreparedStatement ps = con.prepareStatement("insert into book values(?,?,?,?,?,?,?,?,?)");
+
 			ps.setInt(1, bookid);
 			ps.setString(2, title);
 			ps.setString(3, author);
@@ -44,6 +44,7 @@ public class RegisterServlet extends HttpServlet {
 			} else {
 				out.println("Book Registration Failed!");
 			}
+			
 			con.close();
 		} catch (Exception e) {
 			System.out.println(e);
